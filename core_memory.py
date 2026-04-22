@@ -29,7 +29,7 @@ from datetime import datetime
 # CONFIG
 # ---------------------------------------------------------------------------
 
-DB_NAME = "landscape.db"
+DB_NAME = "/mnt/SonglineMemory/landscape.db"
 
 # SongKeeper promotion gate thresholds — adjust as the system matures
 RELEVANCY_THRESHOLD    = 0.60   # 0.0–1.0 score
