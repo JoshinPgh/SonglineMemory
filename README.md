@@ -1,5 +1,5 @@
 🏜️ SonglineMemory
-Graph-based AI memory for developers who can't afford to be wrong about RAM.
+Graph-based AI memory that strengthens with use, not compute.
 The first open-source AI memory system that gets smarter with use, runs on hardware you already own, and requires nothing you don't already have.
 SonglineMemory is a locally hosted, graph-style AI memory architecture that delivers semantic relationship traversal, weighted edge scoring, and multi-tier memory consolidation — with zero vector database overhead, zero cloud dependency, and zero external Python dependencies.
 It runs on an 8GB machine. It fits in a single `.db` file. It gets smarter the longer it runs.
