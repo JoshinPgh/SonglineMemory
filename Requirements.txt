@@ -1,0 +1,6 @@
+# SonglineMemory — Requirements
+# Zero external dependencies. Pure Python stdlib only.
+# Python 3.10+ required (uses match statements and type union syntax)
+#
+# No pip install needed. Clone and run.
+ 
