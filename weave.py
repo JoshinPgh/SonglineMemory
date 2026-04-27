@@ -172,7 +172,7 @@ def _find_neighbors(new_landmark: dict,
         if similarity >= SIMILARITY_THRESHOLD:
             scored.append((similarity, lm))
 
-    return sorted(scored, reverse=True)[:MAX_NEIGHBORS]
+    return sorted(scored, key=lambda x: x[0], reverse=True)[:MAX_NEIGHBORS]
 
 
 # ---------------------------------------------------------------------------
