@@ -48,6 +48,7 @@ NOISE_PATTERNS = [
     r"\bokay so\b", r"\bokay\b(?=\s)", r"\balright\b",
     r"\bi guess\b", r"\bi think\b", r"\bprobably\b",  # hedges
     r"\byeah\b", r"\byep\b", r"\bnope\b",
+    r'^[\s\-—]+',  # strip leading dash/em-dash artifacts from pivot splits
 ]
 
 # Sentence-ending punctuation for splitting within a segment
@@ -95,7 +96,15 @@ def _segment_by_pivot(text: str) -> list[str]:
         else:
             final_segments.append(seg)
 
-    return [s.strip() for s in final_segments if s.strip()]
+    cleaned = []
+    for s in final_segments:
+        s = s.strip()
+        for p in PIVOT_PHRASES:
+            s = re.sub(r'(?i)^' + re.escape(p) + r'[\s\-—]*', '', s).strip()
+        s = re.sub(r'^[\s\-—]+', '', s).strip()
+        if s:
+            cleaned.append(s)
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -151,15 +160,26 @@ def _score_sentences(sentences: list[str]) -> list[tuple[float, str]]:
     return sorted(scored, reverse=True)
 
 
+# REPLACEMENT for _extract_concept_label() in compressor.py
+# Drop this in replacing the existing function — lines 154-178
+
 def _extract_concept_label(text: str) -> str:
     """
     Derives a short concept label from the compressed fact.
-    Strategy: take the first meaningful noun phrase — first 3–5 content words,
-    title-cased, stripped of leading verbs of being.
+    Strategy: take the first meaningful noun phrase — first 3-5 content words,
+    title-cased, stripped of leading verbs of being AND pivot phrases.
     """
-    SKIP_LEAD = {'is', 'are', 'was', 'were', 'the', 'a', 'an', 'we', 'i',
-                 "i'm", "it's", "we're", "they're", "that's", "there's",
-                 'it', 'this', 'that', 'there', 'so', 'and', 'but', 'im'}
+    SKIP_LEAD = {
+        # Verbs of being
+        'is', 'are', 'was', 'were', 'the', 'a', 'an', 'we', 'i',
+        "i'm", "it's", "we're", "they're", "that's", "there's",
+        'it', 'this', 'that', 'there', 'so', 'and', 'but', 'im',
+        # Pivot phrases — single words that leak from segment boundaries
+        'anyway', 'moving', 'next', 'separate', 'different', 'another',
+        'also', 'additionally', 'furthermore', 'however', 'meanwhile',
+        'switching', 'back', 'actually', 'hold', 'wait', 'oh', 'btw',
+        'on', 'by', 'the', 'way', 'side', 'note', 'one', 'more',
+    }
 
     words = text.split()
     content_words = []
