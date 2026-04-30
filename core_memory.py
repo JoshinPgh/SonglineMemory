@@ -6,53 +6,75 @@ The foundation. All tables, all schema, all base read/write operations.
 Nothing gets built without this being right first.
 
 Architecture:
-    LANDMARKS       — Active working memory. Compressed semantic nodes.
-    SONGLINES       — Narrative edges connecting Landmarks. Weighted by use.
-    LORE            — Long-term graduated memory. The wiki layer.
-                      Landmarks that prove themselves across multiple contexts
-                      migrate here via the SongKeeper cycle.
-    DREAM_DIARY     — Human-readable log of every SongKeeper decision.
-                      Trust through transparency.
+    landscape.db — active SonglineMemory graph (landmarks + songlines)
+    lore.db      — long-term wiki/knowledge base (promoted memories live here)
 
-SongKeeper Promotion Gate (a Landmark graduates to LORE only when ALL three pass):
-    1. relevancy_score   >= RELEVANCY_THRESHOLD
-    2. recall_count      >= MIN_RECALL_COUNT
-    3. unique_query_count >= MIN_UNIQUE_QUERY_COUNT
+Two databases. Clean separation. SongKeeper writes to both.
+lore.db is independently queryable — NotebookLM, company KB, genius finder,
+whatever gets plugged in later doesn't touch the active graph.
 
-Zero external dependencies. Pure Python stdlib.
+Tables:
+    landscape.db:
+        landmarks   — active memory nodes
+        songlines   — narrative edges connecting landmarks
+
+    lore.db:
+        lore_entries — promoted long-term knowledge, flat and queryable
+
+SongKeeper hooks baked into schema:
+    landmarks.memory_tier         — 'active' | 'lore' (transition marker)
+    landmarks.relevancy_score     — float 0.0–1.0, decays over time
+    landmarks.recall_count        — how many times this landmark was recalled
+    landmarks.unique_query_count  — how many distinct queries surfaced this
+    landmarks.last_accessed       — timestamp of last recall
+    landmarks.creation_date       — timestamp of placement
+
+    songlines.strength_score      — float, strengthens with walk_count
+    songlines.walk_count          — raw traversal counter
+    songlines.last_walked         — timestamp of last traversal
+
+Promotion gates (SongKeeper checks all three):
+    relevancy_score  >= PROMOTE_RELEVANCY_MIN
+    recall_count     >= PROMOTE_RECALL_MIN
+    unique_query_count >= PROMOTE_UNIQUE_MIN
+
+Zero external dependencies. Pure Python stdlib + sqlite3.
 """
 
 import sqlite3
+import json
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# CONFIG
+# DB PATHS
 # ---------------------------------------------------------------------------
 
-DB_NAME = "/mnt/SonglineMemory/landscape.db"
-
-# SongKeeper promotion gate thresholds — adjust as the system matures
-RELEVANCY_THRESHOLD    = 0.60   # 0.0–1.0 score
-MIN_RECALL_COUNT       = 3      # must have been recalled at least N times
-MIN_UNIQUE_QUERY_COUNT = 2      # must have been reached from at least N distinct queries
-
+DB_NAME      = "/mnt/SonglineMemory/landscape.db"   # active graph
+LORE_DB_NAME = "/mnt/SonglineMemory/lore.db"        # long-term wiki
 
 # ---------------------------------------------------------------------------
-# SCHEMA INIT
+# PROMOTION GATES — SongKeeper uses these to decide what moves to Lore
+# ---------------------------------------------------------------------------
+
+PROMOTE_RELEVANCY_MIN = 0.6   # must have proven relevancy
+PROMOTE_RECALL_MIN    = 3     # recalled at least 3 times
+PROMOTE_UNIQUE_MIN    = 2     # surfaced by at least 2 distinct queries
+
+# ---------------------------------------------------------------------------
+# INIT
 # ---------------------------------------------------------------------------
 
 def init_db():
     """
-    Initializes the SQLite database and all tables.
-    Safe to run on an existing database — uses IF NOT EXISTS throughout.
-    Adds missing columns to existing tables via ALTER TABLE where needed.
+    Initializes both databases.
+    Safe to run repeatedly — CREATE IF NOT EXISTS throughout.
+    Wipes and rebuilds if called with wipe=True (used for clean deploys).
     """
+
+    # --- landscape.db ---
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # --- LANDMARKS ---
-    # Active working memory. Short and medium term.
-    # Every Landmark starts here. SongKeeper decides if it graduates to Lore.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS landmarks (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,99 +82,79 @@ def init_db():
         core_data           TEXT    NOT NULL,
         creation_date       TEXT    NOT NULL,
         last_accessed       TEXT,
+        memory_tier         TEXT    NOT NULL DEFAULT 'active',
         relevancy_score     REAL    NOT NULL DEFAULT 0.5,
         recall_count        INTEGER NOT NULL DEFAULT 0,
         unique_query_count  INTEGER NOT NULL DEFAULT 0,
-        memory_tier         TEXT    NOT NULL DEFAULT 'active'
-        -- memory_tier values: 'active' | 'lore' | 'archived'
+        query_signatures    TEXT    NOT NULL DEFAULT '[]'
     )
     ''')
 
-    # --- SONGLINES ---
-    # Narrative edges between Landmarks.
-    # strength_score and walk_count are the SongKeeper's instruments —
-    # heavily walked edges strengthen, neglected edges decay.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS songlines (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-        origin_id           INTEGER NOT NULL,
-        destination_id      INTEGER NOT NULL,
-        narrative_context   TEXT    NOT NULL,
-        strength_score      REAL    NOT NULL DEFAULT 0.5,
-        walk_count          INTEGER NOT NULL DEFAULT 0,
-        creation_date       TEXT    NOT NULL,
-        last_walked         TEXT,
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        origin_id         INTEGER NOT NULL,
+        destination_id    INTEGER NOT NULL,
+        narrative_context TEXT    NOT NULL,
+        strength_score    REAL    NOT NULL DEFAULT 0.5,
+        walk_count        INTEGER NOT NULL DEFAULT 0,
+        last_walked       TEXT,
         FOREIGN KEY(origin_id)      REFERENCES landmarks(id),
         FOREIGN KEY(destination_id) REFERENCES landmarks(id)
     )
     ''')
 
-    # --- LORE ---
-    # Long-term graduated memory. The wiki layer.
-    # Landmarks that pass the SongKeeper's three-gate promotion test
-    # are migrated here. Nothing is deleted — it changes address.
-    # The Lore grows richer over time and never forgets.
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS lore (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-        origin_landmark_id  INTEGER NOT NULL,   -- original landmarks.id for traceability
-        concept_label       TEXT    NOT NULL,
-        core_data           TEXT    NOT NULL,
-        original_created    TEXT    NOT NULL,   -- when the Landmark was first placed
-        graduated_date      TEXT    NOT NULL,   -- when SongKeeper moved it here
-        relevancy_score     REAL    NOT NULL,   -- score at time of graduation
-        recall_count        INTEGER NOT NULL,
-        unique_query_count  INTEGER NOT NULL,
-        songkeeper_notes    TEXT                -- why it was graduated (from Dream Diary)
-    )
-    ''')
-
-    # --- DREAM_DIARY ---
-    # Every SongKeeper cycle writes here.
-    # Human-readable. Append-only. The conscience of the system.
-    # action values: 'promoted' | 'archived' | 'strengthened' | 'weakened' |
-    #                'merged' | 'flagged' | 'survived'
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS dream_diary (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        cycle_date      TEXT    NOT NULL,
-        action          TEXT    NOT NULL,
-        target_type     TEXT    NOT NULL,   -- 'landmark' | 'songline'
-        target_id       INTEGER NOT NULL,
-        concept_label   TEXT,
-        reason          TEXT    NOT NULL,
-        score_snapshot  TEXT                -- JSON snapshot of scores at decision time
-    )
-    ''')
-
     conn.commit()
     conn.close()
+
+    # --- lore.db ---
+    lore_conn = sqlite3.connect(LORE_DB_NAME)
+    lore_cursor = lore_conn.cursor()
+
+    lore_cursor.execute('''
+    CREATE TABLE IF NOT EXISTS lore_entries (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        concept_label     TEXT NOT NULL,
+        core_data         TEXT NOT NULL,
+        origin_landmark_id INTEGER,
+        promoted_date     TEXT NOT NULL,
+        recall_count      INTEGER NOT NULL DEFAULT 0,
+        unique_query_count INTEGER NOT NULL DEFAULT 0,
+        relevancy_score   REAL NOT NULL DEFAULT 0.5,
+        tags              TEXT NOT NULL DEFAULT '[]'
+    )
+    ''')
+
+    lore_conn.commit()
+    lore_conn.close()
+
     print("SUCCESS: SonglineMemory landscape initialized.")
-    print(f"  DB: {DB_NAME}")
-    print(f"  Promotion gate: relevancy>={RELEVANCY_THRESHOLD} | "
-          f"recalls>={MIN_RECALL_COUNT} | unique_queries>={MIN_UNIQUE_QUERY_COUNT}")
+    print(f"  DB:  {DB_NAME}")
+    print(f"  Lore: {LORE_DB_NAME}")
+    print(f"  Promotion gate: relevancy>={PROMOTE_RELEVANCY_MIN} | "
+          f"recalls>={PROMOTE_RECALL_MIN} | "
+          f"unique_queries>={PROMOTE_UNIQUE_MIN}")
 
 
 # ---------------------------------------------------------------------------
-# LANDMARK OPERATIONS
+# LANDMARK OPS
 # ---------------------------------------------------------------------------
 
 def add_landmark(concept: str, data: str) -> int:
     """
-    Places a new Landmark in active memory.
-    Returns the new landmark ID.
-    Feeds directly from Compressor.compress() output.
+    Places a new Landmark in the active landscape.
+    Returns the new landmark's ID.
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
     INSERT INTO landmarks
-        (concept_label, core_data, creation_date, last_accessed,
-         relevancy_score, recall_count, unique_query_count, memory_tier)
-    VALUES (?, ?, ?, ?, 0.5, 0, 0, 'active')
-    ''', (concept, data, now, now))
+        (concept_label, core_data, creation_date, memory_tier,
+         relevancy_score, recall_count, unique_query_count, query_signatures)
+    VALUES (?, ?, ?, 'active', 0.5, 0, 0, '[]')
+    ''', (concept, data, timestamp))
 
     landmark_id = cursor.lastrowid
     conn.commit()
@@ -162,130 +164,154 @@ def add_landmark(concept: str, data: str) -> int:
     return landmark_id
 
 
-def recall_landmark(landmark_id: int, query_signature: str = None) -> dict | None:
+def recall_landmark(landmark_id: int,
+                    query_signature: str = None) -> dict | None:
     """
-    Retrieves a Landmark by ID and increments its recall_count.
-    If query_signature is provided and is new for this landmark,
-    increments unique_query_count as well.
+    Records a recall event on a Landmark.
+    Increments recall_count. If query_signature is new, increments
+    unique_query_count. Updates last_accessed.
 
-    Returns the landmark as a dict, or None if not found.
-
-    Note: unique_query_count tracking is simplified here —
-    full deduplication requires a query_log table (Phase 2).
-    For now, caller passes a signature and we trust it.
+    Returns updated landmark dict or None if not found.
     """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    cursor.execute('SELECT * FROM landmarks WHERE id = ?', (landmark_id,))
+    cursor.execute(
+        "SELECT * FROM landmarks WHERE id = ?", (landmark_id,)
+    )
     row = cursor.fetchone()
 
     if not row:
         conn.close()
         return None
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lm = dict(row)
+    sigs = json.loads(lm['query_signatures'])
+    now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Always increment recall_count
-    # Increment unique_query_count only when a new query_signature is provided
-    # (simplified — full dedup in Phase 2)
-    if query_signature:
-        cursor.execute('''
-        UPDATE landmarks
-        SET recall_count = recall_count + 1,
-            unique_query_count = unique_query_count + 1,
-            last_accessed = ?
-        WHERE id = ?
-        ''', (now, landmark_id))
-    else:
-        cursor.execute('''
-        UPDATE landmarks
-        SET recall_count = recall_count + 1,
-            last_accessed = ?
-        WHERE id = ?
-        ''', (now, landmark_id))
+    new_unique = 0
+    if query_signature and query_signature not in sigs:
+        sigs.append(query_signature)
+        new_unique = 1
+
+    cursor.execute('''
+    UPDATE landmarks
+    SET recall_count       = recall_count + 1,
+        unique_query_count = unique_query_count + ?,
+        last_accessed      = ?,
+        query_signatures   = ?
+    WHERE id = ?
+    ''', (new_unique, now, json.dumps(sigs), landmark_id))
 
     conn.commit()
 
-    # Re-fetch updated row
-    cursor.execute('SELECT * FROM landmarks WHERE id = ?', (landmark_id,))
+    cursor.execute("SELECT * FROM landmarks WHERE id = ?", (landmark_id,))
     updated = dict(cursor.fetchone())
     conn.close()
 
     return updated
 
 
-def update_relevancy(landmark_id: int, new_score: float) -> None:
-    """
-    Updates the relevancy_score for a Landmark.
-    Called by SongKeeper during the consolidation cycle.
-    Score is clamped to 0.0–1.0.
-    """
-    score = max(0.0, min(1.0, new_score))
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        'UPDATE landmarks SET relevancy_score = ? WHERE id = ?',
-        (score, landmark_id)
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_active_landmarks() -> list[dict]:
-    """Returns all Landmarks in active memory tier."""
+def get_landmark(landmark_id: int) -> dict | None:
+    """Returns a single landmark dict by ID, or None."""
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM landmarks WHERE memory_tier = 'active' ORDER BY creation_date DESC")
+    cursor.execute("SELECT * FROM landmarks WHERE id = ?", (landmark_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_active_landmarks() -> list[dict]:
+    """Returns all landmarks with memory_tier = 'active'."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM landmarks WHERE memory_tier = 'active'")
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
 
 
+def update_landmark_relevancy(landmark_id: int,
+                               new_score: float) -> None:
+    """SongKeeper uses this to adjust relevancy scores during consolidation."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE landmarks SET relevancy_score = ? WHERE id = ?",
+        (max(0.0, min(1.0, new_score)), landmark_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def retire_landmark(landmark_id: int) -> None:
+    """
+    Marks a landmark as 'lore' in landscape.db (soft delete from active graph).
+    Called by SongKeeper after copying to lore.db.
+    The record stays in landscape.db for Songline edge integrity — it just
+    stops appearing in active queries.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE landmarks SET memory_tier = 'lore' WHERE id = ?",
+        (landmark_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
-# SONGLINE OPERATIONS
+# SONGLINE OPS
 # ---------------------------------------------------------------------------
 
-def add_songline(origin_id: int, destination_id: int, narrative: str) -> int:
+def add_songline(origin_id: int,
+                 destination_id: int,
+                 narrative: str) -> int:
     """
     Weaves a new Songline edge between two Landmarks.
-    Returns the new songline ID.
+    Returns the new songline's ID.
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
     INSERT INTO songlines
         (origin_id, destination_id, narrative_context,
-         strength_score, walk_count, creation_date, last_walked)
-    VALUES (?, ?, ?, 0.5, 0, ?, NULL)
-    ''', (origin_id, destination_id, narrative, now))
+         strength_score, walk_count)
+    VALUES (?, ?, ?, 0.5, 0)
+    ''', (origin_id, destination_id, narrative))
 
     songline_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    print(f"SONGLINE WOVEN: {origin_id} → {destination_id} (ID: {songline_id})")
     return songline_id
 
 
 def walk_songline(songline_id: int) -> None:
     """
-    Records a traversal of a Songline edge.
-    Increments walk_count and updates last_walked.
-    SongKeeper uses walk_count to strengthen or weaken edges.
+    Records a traversal on a Songline edge.
+    Increments walk_count and strengthens the edge.
+
+    Strength formula:
+        new_strength = min(1.0, current_strength + 0.05)
+    Each walk nudges the edge stronger, capped at 1.0.
+    SongKeeper handles decay of unwalked edges separately.
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     cursor.execute('''
     UPDATE songlines
-    SET walk_count = walk_count + 1,
-        last_walked = ?
+    SET walk_count     = walk_count + 1,
+        strength_score = MIN(1.0, strength_score + 0.05),
+        last_walked    = ?
     WHERE id = ?
     ''', (now, songline_id))
 
@@ -293,235 +319,178 @@ def walk_songline(songline_id: int) -> None:
     conn.close()
 
 
-def update_songline_strength(songline_id: int, new_strength: float) -> None:
-    """
-    Updates the strength_score of a Songline edge.
-    Called by SongKeeper. Clamped to 0.0–1.0.
-    """
-    strength = max(0.0, min(1.0, new_strength))
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        'UPDATE songlines SET strength_score = ? WHERE id = ?',
-        (strength, songline_id)
-    )
-    conn.commit()
-    conn.close()
-
-
 def get_songlines_for_landmark(landmark_id: int) -> list[dict]:
     """
-    Returns all Songlines connected to a given Landmark
-    (as origin or destination), ordered by strength descending.
+    Returns all Songline edges connected to a Landmark
+    (as origin OR destination).
     """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+
     cursor.execute('''
     SELECT * FROM songlines
     WHERE origin_id = ? OR destination_id = ?
-    ORDER BY strength_score DESC
     ''', (landmark_id, landmark_id))
+
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
 
 
-# ---------------------------------------------------------------------------
-# LORE OPERATIONS
-# ---------------------------------------------------------------------------
-
-def graduate_to_lore(landmark_id: int, notes: str = "") -> int | None:
+def decay_songline(songline_id: int,
+                   decay_rate: float = 0.05) -> float:
     """
-    Migrates a Landmark from active memory to the Lore.
-    Called by SongKeeper when a Landmark passes all three promotion gates.
+    Weakens a Songline edge by decay_rate.
+    Called by SongKeeper on unwalked edges during consolidation.
+    Returns the new strength score.
 
-    Returns the new Lore entry ID, or None if the Landmark doesn't qualify
-    or doesn't exist.
+    Strength floor is 0.0 — SongKeeper prunes edges at or below 0.1.
     """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM landmarks WHERE id = ? AND memory_tier = 'active'", (landmark_id,))
-    lm = cursor.fetchone()
-
-    if not lm:
-        conn.close()
-        return None
-
-    lm = dict(lm)
-
-    # Verify all three gates
-    qualifies = (
-        lm['relevancy_score']    >= RELEVANCY_THRESHOLD and
-        lm['recall_count']       >= MIN_RECALL_COUNT and
-        lm['unique_query_count'] >= MIN_UNIQUE_QUERY_COUNT
+    cursor.execute(
+        "SELECT strength_score FROM songlines WHERE id = ?",
+        (songline_id,)
     )
-
-    if not qualifies:
+    row = cursor.fetchone()
+    if not row:
         conn.close()
-        return None
+        return 0.0
+
+    new_strength = max(0.0, row['strength_score'] - decay_rate)
+
+    cursor.execute(
+        "UPDATE songlines SET strength_score = ? WHERE id = ?",
+        (new_strength, songline_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return new_strength
+
+
+def get_all_songlines() -> list[dict]:
+    """Returns all Songline edges. SongKeeper uses this for bulk decay pass."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM songlines")
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_songline(songline_id: int) -> None:
+    """Hard deletes a Songline edge. Used by SongKeeper to prune dead edges."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM songlines WHERE id = ?", (songline_id,))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# LORE OPS
+# ---------------------------------------------------------------------------
+
+def promote_to_lore(landmark: dict,
+                    tags: list[str] = None) -> int:
+    """
+    Copies a Landmark into lore.db as a Lore entry.
+    Called by SongKeeper after a landmark passes all promotion gates.
+
+    Does NOT remove from landscape.db — retire_landmark() handles that
+    as a separate step, preserving Songline edge references.
+
+    Returns the new lore entry ID.
+    """
+    lore_conn = sqlite3.connect(LORE_DB_NAME)
+    cursor = lore_conn.cursor()
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tag_json = json.dumps(tags or [])
 
-    # Insert into Lore
     cursor.execute('''
-    INSERT INTO lore
-        (origin_landmark_id, concept_label, core_data, original_created,
-         graduated_date, relevancy_score, recall_count, unique_query_count, songkeeper_notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO lore_entries
+        (concept_label, core_data, origin_landmark_id, promoted_date,
+         recall_count, unique_query_count, relevancy_score, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
-        lm['id'], lm['concept_label'], lm['core_data'], lm['creation_date'],
-        now, lm['relevancy_score'], lm['recall_count'], lm['unique_query_count'], notes
+        landmark['concept_label'],
+        landmark['core_data'],
+        landmark['id'],
+        now,
+        landmark.get('recall_count', 0),
+        landmark.get('unique_query_count', 0),
+        landmark.get('relevancy_score', 0.5),
+        tag_json,
     ))
 
     lore_id = cursor.lastrowid
+    lore_conn.commit()
+    lore_conn.close()
 
-    # Update the Landmark's tier — keep it in landmarks table for graph integrity
-    # but mark it as 'lore' so active queries skip it
-    cursor.execute(
-        "UPDATE landmarks SET memory_tier = 'lore' WHERE id = ?",
-        (landmark_id,)
-    )
-
-    conn.commit()
-    conn.close()
-
-    print(f"GRADUATED TO LORE: '{lm['concept_label']}' (Landmark {landmark_id} → Lore {lore_id})")
     return lore_id
 
 
-def get_lore(search_term: str = None) -> list[dict]:
+def query_lore(search_text: str = None,
+               tag: str = None,
+               limit: int = 20) -> list[dict]:
     """
-    Returns Lore entries, optionally filtered by search_term
-    matching concept_label or core_data.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    Basic Lore query — returns entries matching text or tag.
+    This is a simple LIKE search for now.
+    Full TF-IDF scoring on Lore is a Phase 3 enhancement.
 
-    if search_term:
-        pattern = f"%{search_term}%"
+    If neither search_text nor tag provided, returns most recent entries.
+    """
+    lore_conn = sqlite3.connect(LORE_DB_NAME)
+    lore_conn.row_factory = sqlite3.Row
+    cursor = lore_conn.cursor()
+
+    if search_text:
+        pattern = f"%{search_text}%"
         cursor.execute('''
-        SELECT * FROM lore
+        SELECT * FROM lore_entries
         WHERE concept_label LIKE ? OR core_data LIKE ?
-        ORDER BY graduated_date DESC
-        ''', (pattern, pattern))
+        ORDER BY promoted_date DESC
+        LIMIT ?
+        ''', (pattern, pattern, limit))
+    elif tag:
+        pattern = f'%"{tag}"%'
+        cursor.execute('''
+        SELECT * FROM lore_entries
+        WHERE tags LIKE ?
+        ORDER BY promoted_date DESC
+        LIMIT ?
+        ''', (pattern, limit))
     else:
-        cursor.execute('SELECT * FROM lore ORDER BY graduated_date DESC')
+        cursor.execute('''
+        SELECT * FROM lore_entries
+        ORDER BY promoted_date DESC
+        LIMIT ?
+        ''', (limit,))
 
     rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
+    lore_conn.close()
     return rows
 
 
 # ---------------------------------------------------------------------------
-# DREAM DIARY OPERATIONS
-# ---------------------------------------------------------------------------
-
-def log_dream(action: str, target_type: str, target_id: int,
-              concept_label: str = "", reason: str = "",
-              score_snapshot: str = "") -> None:
-    """
-    Writes a single entry to the Dream Diary.
-    Called by SongKeeper for every decision it makes.
-
-    action       : 'promoted' | 'archived' | 'strengthened' | 'weakened' |
-                   'merged' | 'flagged' | 'survived'
-    target_type  : 'landmark' | 'songline'
-    score_snapshot: JSON string of relevant scores at decision time
-    """
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute('''
-    INSERT INTO dream_diary
-        (cycle_date, action, target_type, target_id,
-         concept_label, reason, score_snapshot)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (now, action, target_type, target_id, concept_label, reason, score_snapshot))
-
-    conn.commit()
-    conn.close()
-
-
-def get_dream_diary(limit: int = 50) -> list[dict]:
-    """Returns the most recent Dream Diary entries."""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('''
-    SELECT * FROM dream_diary
-    ORDER BY cycle_date DESC
-    LIMIT ?
-    ''', (limit,))
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
-
-
-def export_dream_diary_md(filepath: str = "DREAMS.md") -> None:
-    """
-    Exports the Dream Diary to a human-readable markdown file.
-    This is the transparency layer — reviewable by anyone without
-    touching the database.
-    """
-    entries = get_dream_diary(limit=500)
-
-    lines = [
-        "# SonglineMemory — Dream Diary",
-        f"*Generated by SongKeeper on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
-        "",
-        "---",
-        ""
-    ]
-
-    if not entries:
-        lines.append("*No SongKeeper cycles have run yet.*")
-    else:
-        current_date = None
-        for e in entries:
-            date_str = e['cycle_date'][:10]
-            if date_str != current_date:
-                current_date = date_str
-                lines.append(f"## {date_str}")
-                lines.append("")
-
-            icon = {
-                'promoted':    '⬆️',
-                'archived':    '📦',
-                'strengthened':'💪',
-                'weakened':    '📉',
-                'merged':      '🔗',
-                'flagged':     '🚩',
-                'survived':    '✅',
-            }.get(e['action'], '•')
-
-            lines.append(
-                f"{icon} **{e['action'].upper()}** | "
-                f"{e['target_type']} #{e['target_id']} | "
-                f"*{e['concept_label']}*"
-            )
-            lines.append(f"   > {e['reason']}")
-            if e['score_snapshot']:
-                lines.append(f"   > Scores: `{e['score_snapshot']}`")
-            lines.append("")
-
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
-
-    print(f"DREAM DIARY EXPORTED: {filepath} ({len(entries)} entries)")
-
-
-# ---------------------------------------------------------------------------
-# BOOTSTRAP
+# TEST
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("Booting SonglineMemory landscape...")
+    print("Initializing SonglineMemory landscape...")
     init_db()
-    print()
-    print("Schema ready. Tables: landmarks, songlines, lore, dream_diary")
-    print("Next: build retrieval function and auto-Songline weave on write.")
+    print("\nPlacing a test landmark...")
+    lid = add_landmark("Test Concept", "This is a test fact for schema verification.")
+    print(f"\nRecalling landmark {lid}...")
+    recall_landmark(lid, query_signature="test_query_1")
+    recall_landmark(lid, query_signature="test_query_2")
+    lm = get_landmark(lid)
+    print(f"  recall_count: {lm['recall_count']}")
+    print(f"  unique_query_count: {lm['unique_query_count']}")
+    print("\nSchema verified. Ready for SongKeeper.")
