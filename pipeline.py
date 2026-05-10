@@ -33,9 +33,65 @@ Usage:
 Zero external dependencies. Pure Python stdlib.
 """
 
+import sqlite3
+import string
+
 from compressor import compress
-from core_memory import add_landmark, init_db
+from core_memory import add_landmark, init_db, DB_NAME
 from weave import weave
+
+
+# ---------------------------------------------------------------------------
+# DUPLICATE DETECTION
+# ---------------------------------------------------------------------------
+
+# How similar two concept labels need to be to count as a duplicate (0.0–1.0)
+DUPLICATE_THRESHOLD = 0.80
+
+def _tokenize_label(text: str) -> set[str]:
+    """Simple token set for label comparison — lowercase, no punctuation."""
+    stop = {'the','a','an','is','are','was','to','of','in','for','on','with'}
+    return {
+        w for w in
+        text.lower().translate(str.maketrans('', '', string.punctuation)).split()
+        if w not in stop and len(w) > 2
+    }
+
+def _is_duplicate(concept_label: str,
+                  existing_labels: list[str]) -> bool:
+    """
+    Returns True if concept_label is too similar to any existing active label.
+    Uses Jaccard similarity on token sets — fast, zero dependencies.
+    Jaccard = |A ∩ B| / |A ∪ B|
+    """
+    tokens_new = _tokenize_label(concept_label)
+    if not tokens_new:
+        return False
+
+    for existing in existing_labels:
+        tokens_ex = _tokenize_label(existing)
+        if not tokens_ex:
+            continue
+        intersection = len(tokens_new & tokens_ex)
+        union        = len(tokens_new | tokens_ex)
+        if union == 0:
+            continue
+        if intersection / union >= DUPLICATE_THRESHOLD:
+            return True
+
+    return False
+
+
+def _load_active_labels() -> list[str]:
+    """Loads all active concept labels from the database for duplicate checking."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT concept_label FROM landmarks WHERE memory_tier = 'active'"
+    )
+    labels = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return labels
 
 
 # ---------------------------------------------------------------------------
@@ -89,13 +145,25 @@ def remember(raw_input: str,
 
     results = []
 
+    # Load existing labels once for duplicate checking across this batch
+    existing_labels = _load_active_labels()
+
     for concept_label, core_data in facts:
 
         # Apply source tag to concept_label if provided
         tagged_label = f"[{source}] {concept_label}" if source else concept_label
 
+        # Duplicate check — skip if too similar to an existing active landmark
+        if _is_duplicate(tagged_label, existing_labels):
+            if verbose:
+                print(f"[pipeline] SKIPPED duplicate: '{tagged_label}'")
+            continue
+
         # Pass 2 — Place each fact as a Landmark
         landmark_id = add_landmark(tagged_label, core_data)
+
+        # Track in-session so we catch dupes within the same batch
+        existing_labels.append(tagged_label)
 
         # Pass 3 — Auto-weave Songlines to nearest neighbors
         songline_ids = weave(
