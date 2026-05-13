@@ -1,4 +1,3 @@
-
 <style>
   .phase { margin-bottom: 2rem; }
   .phase-header { display: flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; }
@@ -22,93 +21,172 @@
 <div style="padding: 1rem 0;">
   <h2 class="sr-only">SonglineMemory development roadmap</h2>
 
+  <!-- PHASE 1 — COMPLETE -->
   <div class="phase">
     <div class="phase-header">
-      <span class="phase-badge" style="background:#E1F5EE; color:#0F6E56;">Phase 1 — Core (start here)</span>
+      <span class="phase-badge" style="background:#E1F5EE; color:#0F6E56;">Phase 1 — Core ✓ Complete</span>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Build the retrieval function</div>
-        <div class="task-note">Walk the Songlines from a query — find relevant Landmarks by concept label, return the connecting narrative path. This is the open loop Gemini left.</div>
+        <div class="task-label">Two-pass context compressor</div>
+        <div class="task-note">Pivot-based segmentation + TF-IDF sentence scoring. Strips dictation noise, extracts core facts, outputs (concept_label, core_data) tuples ready for add_landmark(). Pivot leak fix included.</div>
       </div>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Auto-generate Songline edges on write</div>
-        <div class="task-note">When a new Landmark is placed, auto-generate a narrative connection to recent/related Landmarks. The "weave" step — core to the whole concept.</div>
+        <div class="task-label">Core memory schema — two-database architecture</div>
+        <div class="task-note">landscape.db (active graph) and lore.db (long-term wiki) — cleanly separated. Full SongKeeper hooks baked in: memory_tier, relevancy_score, recall_count, unique_query_count, walk_count, strength_score.</div>
       </div>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Replace hash compressor with semantic similarity</div>
-        <div class="task-note">Swap out the hashing algo for something that preserves meaning, not just identity. Pure Python, zero external deps — TF-IDF or cosine similarity via math module.</div>
+        <div class="task-label">Auto-weave Songline edges on write</div>
+        <div class="task-note">Every new Landmark scores against all active Landmarks via TF-IDF cosine similarity. Top neighbors get template-based narrative edges woven on arrival. The graph builds itself.</div>
       </div>
     </div>
+
+    <div class="task done" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">TF-IDF retrieval with relevancy boost</div>
+        <div class="task-note">Query walks the active landscape via cosine similarity. Proven memories get a mild relevancy multiplier. Returns ranked Landmarks with full Songline narrative paths attached.</div>
+      </div>
+    </div>
+
+    <div class="task done" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Duplicate landmark detection</div>
+        <div class="task-note">Jaccard similarity check at 0.80 threshold before every placement. Catches duplicates against the database AND within the same batch import. Keeps the landscape clean.</div>
+      </div>
+    </div>
+
+    <div class="task done" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Write pipeline with source tagging</div>
+        <div class="task-note">Single entry point for all memory writes — live session, batch import, or agent-generated. Source tag (e.g. "gemini_wiki") prefixes concept labels for Lore queryability by origin.</div>
+      </div>
+    </div>
+
   </div>
 
   <hr class="divider">
 
+  <!-- PHASE 2 — COMPLETE -->
   <div class="phase">
     <div class="phase-header">
-      <span class="phase-badge" style="background:#EEEDFE; color:#3C3489;">Phase 2 — Dream cycle</span>
+      <span class="phase-badge" style="background:#EEEDFE; color:#3C3489;">Phase 2 — SongKeeper ✓ Complete</span>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Songline strength scoring</div>
-        <div class="task-note">Track how often each edge is walked. High-traffic connections strengthen. Low-traffic ones decay. The differentiator — nobody else does this on a graph.</div>
+        <div class="task-label">Songline strength scoring and decay</div>
+        <div class="task-note">Every traversal strengthens an edge (+0.05, capped at 1.0). Unwalked edges decay each SongKeeper cycle (-0.05). Edges at or below 0.10 are pruned. The graph reflects actual use.</div>
       </div>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Dream consolidation pass</div>
-        <div class="task-note">Scheduled pass that prunes orphaned Landmarks, merges near-duplicates, and rewrites weakened Songlines. Inspired by OpenClaw's 3-phase + scoring gates.</div>
+        <div class="task-label">Relevancy scoring engine</div>
+        <div class="task-note">Three weighted signals: recall frequency (40%), unique query diversity (35%), recency (25%). Recalculated every SongKeeper cycle. Scores drive promotion gate decisions.</div>
       </div>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Dream diary (DREAMS.md equivalent)</div>
-        <div class="task-note">Human-readable log of what the consolidation pass did. Trust through transparency — OpenClaw's best UI idea, adapted for our system.</div>
+        <div class="task-label">Lore promotion with triple-gate system</div>
+        <div class="task-note">Landmarks must pass all three gates to reach Lore: relevancy ≥ 0.6, recall ≥ 3, unique queries ≥ 2. Not majority — all three. Only memories proven across multiple contexts survive.</div>
       </div>
     </div>
-    <div class="task" onclick="toggle(this)">
+
+    <div class="task done" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Historical backfill</div>
-        <div class="task-note">Feed old notes/context retroactively through the landscape. Lets new models onboard to existing memory without manual re-entry.</div>
+        <div class="task-label">DREAMS.md — Dream Diary</div>
+        <div class="task-note">Every SongKeeper cycle appends a human-readable entry: what decayed, what was pruned, what relevancy scores shifted, what was promoted to Lore. Trust through transparency.</div>
       </div>
     </div>
+
+    <div class="task done" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Cron scheduling on 851Office-1</div>
+        <div class="task-note">SongKeeper runs nightly at 2am via cron. No manual intervention. Logs to songkeeper.log. Runs whether you're at the machine or in Florida.</div>
+      </div>
+    </div>
+
   </div>
 
   <hr class="divider">
 
+  <!-- PHASE 3 — IN PROGRESS -->
   <div class="phase">
     <div class="phase-header">
-      <span class="phase-badge" style="background:#FAEEDA; color:#633806;">Phase 3 — Multi-model & publish</span>
+      <span class="phase-badge" style="background:#FAEEDA; color:#633806;">Phase 3 — Connect (in progress)</span>
     </div>
+
+    <div class="task done" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Flask API layer — live on 851Office-1</div>
+        <div class="task-note">Four authenticated endpoints: /health, /remember, /query, /lore. API key auth via .env (never in GitHub). Auto-starts on reboot via cron. Accessible locally and via Tailscale from anywhere.</div>
+      </div>
+    </div>
+
     <div class="task" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Multi-model API layer</div>
-        <div class="task-note">Expose the landscape via a local API endpoint. Claude, Gemini, and Gemma all read/write to the same SQLite. Shared operational memory across models.</div>
+        <div class="task-label">Tailscale remote access test from 851Mobile-2</div>
+        <div class="task-note">Verify API responds correctly from the Lenovo/Zorin travel machine before Florida trip on the 22nd. Confirm /health, /query, and /remember all work over Tailscale.</div>
       </div>
     </div>
+
     <div class="task" onclick="toggle(this)">
       <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div class="task-body">
-        <div class="task-label">Clean up README and repo for public attention</div>
-        <div class="task-note">Rewrite docs, add usage examples, publish the differentiated positioning. Target AI/open source community on GitHub and HN.</div>
+        <div class="task-label">Chrome extension — SonglineMemory reader/writer</div>
+        <div class="task-note">Reads Claude conversation context and writes to /remember. Injects retrieved memory from /query into active Claude sessions. Developer-focused. Works across Claude, Gemini, and ChatGPT web interfaces.</div>
       </div>
     </div>
+
+    <div class="task" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Company wiki ingestion — batch import to Lore</div>
+        <div class="task-note">Gemini workspace wiki + OneDrive archive curated and fed through pipeline with source tagging. Foundational institutional knowledge seeded into the landscape before active use.</div>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">Multi-model memory — Claude + Gemini on shared landscape</div>
+        <div class="task-note">Both models read and write to the same SQLite via the API layer. Shared operational memory across the Twin-CEO architecture. Gemini writes from Workspace; Claude writes from conversation sessions.</div>
+      </div>
+    </div>
+
+    <div class="task" onclick="toggle(this)">
+      <div class="check"><svg class="check-mark" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="task-body">
+        <div class="task-label">README rewrite and repo polish for public release</div>
+        <div class="task-note">Rewrite docs to reflect actual build. Add usage examples, API docs, architecture diagram. Differentiated positioning: graph-based, zero-dependency, strengthens with use not compute. Target GitHub and HN.</div>
+      </div>
+    </div>
+
   </div>
 
   <hr class="divider">
-  <button class="ask-btn" onclick="sendPrompt('Let\'s start Phase 1 of SonglineMemory — build the retrieval function first.')">Start Phase 1 ↗</button>
+  <button class="ask-btn" onclick="sendPrompt('SonglineMemory Phase 3 — next step is Tailscale test from 851Mobile-2.')">Continue Phase 3 ↗</button>
 </div>
 
 <script>
